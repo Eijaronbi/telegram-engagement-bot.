@@ -5,19 +5,28 @@ import aiosqlite
 import io
 import matplotlib.pyplot as plt
 from datetime import datetime, timezone
+from dotenv import load_dotenv  # <--- Added this
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
 # --- 1. CONFIGURATION ---
-BOT_TOKEN = "8545441860:AAHXh3B2_HDbJKbkHNrIAEunJvEhyx7zuSU"
+# This line looks for your .env file and reads the secrets
+load_dotenv() 
 
-# Database path setup
+# Now we pull the token from the .env file instead of typing it here
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DB_NAME = os.getenv("DB_NAME", "engagement.db")
+
+# Database path setup - keeping it in your tg_engagement_db folder
 DB_FOLDER = os.path.join(os.path.expanduser("~"), "Documents", "tg_engagement_db")
 os.makedirs(DB_FOLDER, exist_ok=True)
-DB = os.path.join(DB_FOLDER, "engagement.db")
+DB = os.path.join(DB_FOLDER, DB_NAME)
 
-# Initialize Bot and Dispatcher (Fixes NameError: 'dp')
+# Initialize Bot and Dispatcher
+if not BOT_TOKEN:
+    exit("Error: BOT_TOKEN not found. Check your .env file!")
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -34,15 +43,14 @@ async def init_db():
         )
         """)
         await db.commit()
-    print("✅ Database is ready.")
+    print(f"✅ Database {DB_NAME} is ready.")
 
-# --- 3. THE STATS COMMAND (Visuals + Leaderboard) ---
+# --- 3. THE STATS COMMAND ---
 @dp.message(Command("stats"))
 async def stats(message: types.Message):
     group_name = message.chat.title if message.chat.title else "this group"
     
     async with aiosqlite.connect(DB) as db:
-        # Fetch Top Contributors
         cursor_share = await db.execute("""
             SELECT username, COUNT(*) FROM messages 
             WHERE chat_id = ? GROUP BY user_id 
@@ -50,7 +58,6 @@ async def stats(message: types.Message):
         """, (message.chat.id,))
         share_rows = await cursor_share.fetchall()
 
-        # Fetch Hourly Activity
         cursor_hours = await db.execute("""
             SELECT strftime('%H', timestamp) as hour, COUNT(*) 
             FROM messages WHERE chat_id = ? 
@@ -62,7 +69,6 @@ async def stats(message: types.Message):
         await message.reply("No data yet! Send some messages first.")
         return
 
-    # --- 1. Leaderboard Text (Names and Medals) ---
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     leaderboard_text = f"📊 **Activity Report: {group_name}**\n\n"
     leaderboard_text += "🔥 **Top Contributors:**\n"
@@ -72,11 +78,9 @@ async def stats(message: types.Message):
         user_display = f"@{username}" if username != "unknown" else "User"
         leaderboard_text += f"{rank_icon} {user_display}: **{count} messages**\n"
 
-    # --- 2. White Background Visuals (Matching your photo) ---
     plt.figure(figsize=(10, 5))
-    plt.style.use('default') # Forces white background style
+    plt.style.use('default') 
     
-    # Left: Pie Chart (Matching Blue, Green, Purple colors)
     plt.subplot(1, 2, 1)
     labels = [f"@{r[0]}" if r[0] != "unknown" else "User" for r in share_rows]
     colors = ['#4dd2ff', '#99e699', '#ac71db', '#ffdb4d', '#ff944d']
@@ -84,7 +88,6 @@ async def stats(message: types.Message):
             startangle=140, colors=colors)
     plt.title("Top Contributors", fontsize=10)
 
-    # Right: Orange Bar Chart
     plt.subplot(1, 2, 2)
     hours_dict = {int(r[0]): r[1] for r in hour_rows}
     y_values = [hours_dict.get(h, 0) for h in range(24)]
@@ -94,19 +97,13 @@ async def stats(message: types.Message):
     plt.xticks(range(0, 24, 6), fontsize=8)
 
     plt.tight_layout()
-    
     buf = io.BytesIO()
     plt.savefig(buf, format='png', facecolor='white')
     buf.seek(0)
     plt.close()
 
-    # --- 3. Final Output ---
     photo = types.BufferedInputFile(buf.getvalue(), filename="dashboard.png")
-    await message.answer_photo(
-        photo=photo, 
-        caption=leaderboard_text,
-        parse_mode="Markdown"
-    )
+    await message.answer_photo(photo=photo, caption=leaderboard_text, parse_mode="Markdown")
 
 # --- 4. MESSAGE TRACKER ---
 @dp.message()
@@ -137,3 +134,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("\nBot stopped safely.")
+    
